@@ -1,14 +1,27 @@
 import numpy as np
 from PIL import Image, ImageFilter
+from scipy import ndimage
  
+# هل نقلب الألوان قبل الموديل؟ (False = لا، True = نعم)
+# في المهمة 4 جرّب الاثنين وشوف أيهم أفضل.
 INVERT = False
-
+ 
+ 
+# ------------------------------------------------------------
+# 1) تحميل الموديل
+# ------------------------------------------------------------
 def load_model():
     from tensorflow.keras.applications import MobileNetV2
+    # include_top=False  -> نشيل طبقة التصنيف (ما نبي اسم الرسمة)
+    # pooling="avg"      -> الناتج vector واحد طوله 1280
     model = MobileNetV2(weights="imagenet", include_top=False,
                         pooling="avg", input_shape=(224, 224, 3))
     return model
-
+ 
+ 
+# ------------------------------------------------------------
+# 2) نجهّز الصور 28x28 للموديل
+# ------------------------------------------------------------
 def to_model_input(images_28):
     import tensorflow as tf
     from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
@@ -16,26 +29,46 @@ def to_model_input(images_28):
     x = np.array(images_28, dtype="float32").reshape(-1, 28, 28)
  
     if INVERT:
-        x = 255 - x                      
-    x = x[..., np.newaxis]             
-    x = tf.image.resize(x, (224, 224)).numpy()  
-    x = np.repeat(x, 3, axis=-1)         
-    x = preprocess_input(x)              
+        x = 255 - x                      # نقلب الألوان
+ 
+    x = x[..., np.newaxis]               # نضيف قناة (رمادي): (N, 28, 28, 1)
+    x = tf.image.resize(x, (224, 224)).numpy()   # نكبّر الصورة لـ 224
+    x = np.repeat(x, 3, axis=-1)         # نكرر القناة 3 مرات (RGB)
+    x = preprocess_input(x)              # تجهيز الموديل نفسه
     return x
-
+ 
+ 
+# ------------------------------------------------------------
+# 3) نحوّل الصور إلى vectors
+# ------------------------------------------------------------
 def embed(model, images_28):
     all_vectors = []
-    for start in range(0, len(images_28), 64):           
+    for start in range(0, len(images_28), 64):          # 64 صورة كل مرة
         batch = images_28[start:start + 64]
         vectors = model.predict(to_model_input(batch), verbose=0)
         all_vectors.append(vectors)
  
     vectors = np.vstack(all_vectors)
     lengths = np.linalg.norm(vectors, axis=1, keepdims=True)
-    return vectors / lengths 
-
+    return vectors / lengths             # نخلي طول كل vector = 1
+ 
+ 
+# ------------------------------------------------------------
+# 4) نجهّز رسمة المستخدم (canvas / upload / camera)
+# ------------------------------------------------------------
 def flatten_to_white(image):
-     gray_img = flatten_to_white(image).convert("L")
+    # الـ canvas يعطينا صورة شفافة، نحطها على خلفية بيضاء
+    if not isinstance(image, Image.Image):
+        image = Image.fromarray(np.array(image).astype("uint8"))
+    image = image.convert("RGBA")
+    white = Image.new("RGBA", image.size, (255, 255, 255, 255))
+    image = Image.alpha_composite(white, image)
+    return image.convert("RGB")
+ 
+ 
+def preprocess_query(image):
+    # أ) رمادي (ونصغّر الصور الكبيرة عشان تكون أسرع)
+    gray_img = flatten_to_white(image).convert("L")
     gray_img.thumbnail((400, 400))
     gray = np.array(gray_img, dtype="float32")
  
@@ -70,22 +103,30 @@ def flatten_to_white(image):
     ys, xs = np.where(strokes)
     strokes = strokes[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
  
+    # هـ) نخليها مربع مع هامش صغير
     h, w = strokes.shape
     side = max(h, w)
     margin = max(2, int(side * 0.12))
     square = np.zeros((side + 2 * margin, side + 2 * margin), dtype="uint8")
     top = margin + (side - h) // 2
     left = margin + (side - w) // 2
-    square[top:top + h, left:left + w] = strokes * 255  
+    square[top:top + h, left:left + w] = strokes * 255   # خطوط بيضاء على أسود
+ 
+    # و) نصغّر، نسمّك الخطوط شوي، ونصغّر لـ 28x28
     img = Image.fromarray(square).resize((56, 56))
-    img = img.filter(ImageFilter.MaxFilter(3))     
+    img = img.filter(ImageFilter.MaxFilter(3))     # تسميك
     img = img.resize((28, 28))
  
     arr = np.array(img, dtype="float32")
-    arr = arr / arr.max() * 255                    
+    arr = arr / arr.max() * 255                     # أقوى بكسل = 255
     return arr.astype("uint8")
-
+ 
+ 
+# ------------------------------------------------------------
+# 5) البحث
+# ------------------------------------------------------------
 def search(query_vector, embeddings, k=25):
-    scores = embeddings @ query_vector     
-    best = np.argsort(-scores)[:k]          
+    scores = embeddings @ query_vector      # التشابه مع كل رسمة بالمكتبة
+    best = np.argsort(-scores)[:k]          # أرقام أعلى k
     return best, scores[best]
+ 
