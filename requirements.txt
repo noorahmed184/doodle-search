@@ -2,5 +2,3 @@ streamlit
 numpy
 pillow
 tensorflow-cpu
-PIL 
-search_core 
