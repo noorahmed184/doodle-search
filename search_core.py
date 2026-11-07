@@ -35,21 +35,38 @@ def embed(model, images_28):
     return vectors / lengths 
 
 def flatten_to_white(image):
-    image = image.convert("RGBA")
-    background = Image.new("RGBA", image.size, "white")
-    background.alpha_composite(image)
-    return background.convert("RGB")
+     gray_img = flatten_to_white(image).convert("L")
+    gray_img.thumbnail((400, 400))
+    gray = np.array(gray_img, dtype="float32")
  
-def preprocess_query(image):
-    gray = np.array(flatten_to_white(image).convert("L"), dtype="float32")
- 
+    # ب) ما فيه رسم؟ (الصورة كلها لون واحد تقريباً)
     if gray.max() - gray.min() < 40:
         return None
  
-    strokes = gray < (gray.mean() - 40)
+    # ج) الخطوط = البكسلات اللي أغمق من اللي حولها بشكل واضح
+    #    (هذا يتجاهل الخلفيات الغامقة الكبيرة مثل الخشب والظلال)
+    blur = max(2, max(gray.shape) // 15)
+    around = np.array(gray_img.filter(ImageFilter.GaussianBlur(blur)), dtype="float32")
+    strokes = gray < (around - 30)
+ 
+    # د1) ننظف: نشيل النقاط الصغيرة، ونشيل أي شي ملاصق لحافة الصورة
+    #     (يد، قلم، حافة طاولة...)
+    labels, count = ndimage.label(strokes, structure=np.ones((3, 3)))
+    sizes = ndimage.sum(strokes, labels, range(1, count + 1))
+    on_edge = np.unique(np.concatenate(
+        [labels[0, :], labels[-1, :], labels[:, 0], labels[:, -1]]))
+    keep = np.zeros(count + 1, dtype=bool)
+    for number in range(1, count + 1):
+        if sizes[number - 1] >= 10 and number not in on_edge:
+            keep[number] = True
+    cleaned = keep[labels]
+    if cleaned.sum() >= 20:          # إذا بقي شي نستخدمه، وإلا نرجع للأصلي
+        strokes = cleaned
+ 
     if strokes.sum() < 20:
         return None
  
+    # د2) نقص حول الرسمة
     ys, xs = np.where(strokes)
     strokes = strokes[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
  
