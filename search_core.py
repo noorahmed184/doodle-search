@@ -1,134 +1,152 @@
+
 import numpy as np
-from PIL import Image, ImageFilter
-from scipy import ndimage
- 
-# هل نقلب الألوان قبل الموديل؟ (False = لا، True = نعم)
-# في المهمة 4 جرّب الاثنين وشوف أيهم أفضل.
-INVERT = False
- 
-STROKE_CONTRAST = 30
- 
- 
-# ------------------------------------------------------------
-# 1) تحميل الموديل
-# ------------------------------------------------------------
+import tensorflow as tf
+from PIL import Image
+from tensorflow.keras.applications.mobilenet_v2 import (
+    MobileNetV2,
+    preprocess_input
+)
+
+MODEL_SIZE = 96
+
+
+# 1. Load the model
 def load_model():
-    from tensorflow.keras.applications import MobileNetV2
-    # include_top=False  -> نشيل طبقة التصنيف (ما نبي اسم الرسمة)
-    # pooling="avg"      -> الناتج vector واحد طوله 1280
-    model = MobileNetV2(weights="imagenet", include_top=False,
-                        pooling="avg", input_shape=(224, 224, 3))
+    model = MobileNetV2(
+        weights="imagenet",
+        include_top=False,
+        pooling="avg",
+        input_shape=(MODEL_SIZE, MODEL_SIZE, 3)
+    )
     return model
- 
- 
-# ------------------------------------------------------------
-# 2) نجهّز الصور 28x28 للموديل
-# ------------------------------------------------------------
-def to_model_input(images_28):
-    import tensorflow as tf
-    from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
- 
-    x = np.array(images_28, dtype="float32").reshape(-1, 28, 28)
- 
-    if INVERT:
-        x = 255 - x                      # نقلب الألوان
- 
-    x = x[..., np.newaxis]               # نضيف قناة (رمادي): (N, 28, 28, 1)
-    x = tf.image.resize(x, (224, 224)).numpy()   # نكبّر الصورة لـ 224
-    x = np.repeat(x, 3, axis=-1)         # نكرر القناة 3 مرات (RGB)
-    x = preprocess_input(x)              # تجهيز الموديل نفسه
-    return x
- 
- 
-# ------------------------------------------------------------
-# 3) نحوّل الصور إلى vectors
-# ------------------------------------------------------------
-def embed(model, images_28):
-    all_vectors = []
-    for start in range(0, len(images_28), 64):          # 64 صورة كل مرة
-        batch = images_28[start:start + 64]
-        vectors = model.predict(to_model_input(batch), verbose=0)
-        all_vectors.append(vectors)
- 
-    vectors = np.vstack(all_vectors)
-    lengths = np.linalg.norm(vectors, axis=1, keepdims=True)
-    return vectors / lengths             # نخلي طول كل vector = 1
- 
- 
-# ------------------------------------------------------------
-# 4) نجهّز رسمة المستخدم (canvas / upload / camera)
-# ------------------------------------------------------------
-def flatten_to_white(image):
-    # الـ canvas يعطينا صورة شفافة، نحطها على خلفية بيضاء
-    if not isinstance(image, Image.Image):
-        image = Image.fromarray(np.array(image).astype("uint8"))
-    image = image.convert("RGBA")
-    white = Image.new("RGBA", image.size, (255, 255, 255, 255))
-    image = Image.alpha_composite(white, image)
-    return image.convert("RGB")
- 
- 
+
+
+# 2. Prepare images for the model
+def to_model_input(images_28, invert=True):
+
+    x = np.asarray(images_28, dtype="float32")
+    x = x.reshape(-1, 28, 28, 1)
+
+    if invert:
+        x = 255.0 - x
+
+    x = tf.image.resize(
+        x,
+        (MODEL_SIZE, MODEL_SIZE)
+    ).numpy()
+
+    x = np.repeat(x, 3, axis=-1)
+
+    return preprocess_input(x)
+
+
+# 3. Convert images into vectors
+def embed(model, images_28, invert=True, batch_size=64):
+
+    batches = []
+
+    for i in range(0, len(images_28), batch_size):
+
+        batch = images_28[i:i + batch_size]
+
+        vectors = model.predict(
+            to_model_input(batch, invert),
+            verbose=0
+        )
+
+        batches.append(vectors)
+
+    vectors = np.concatenate(batches)
+
+    vectors = tf.math.l2_normalize(
+        vectors,
+        axis=1
+    ).numpy()
+
+    return vectors
+
+
+# 4. Prepare the user's uploaded image
 def preprocess_query(image):
-    # أ) رمادي (ونصغّر الصور الكبيرة عشان تكون أسرع)
-    gray_img = flatten_to_white(image).convert("L")
-    gray_img.thumbnail((400, 400))
-    gray = np.array(gray_img, dtype="float32")
- 
-    # ب) ما فيه رسم؟ (الصورة كلها لون واحد تقريباً)
-    if gray.max() - gray.min() < 40:
+
+    # Convert image to grayscale
+    image = image.convert("RGBA")
+
+    white = Image.new("RGBA", image.size, "white")
+
+    image = Image.alpha_composite(
+        white,
+        image
+    )
+
+    gray = np.asarray(
+        image.convert("L"),
+        dtype="float32"
+    )
+
+    # Check if the image is blank
+    low = gray.min()
+    high = gray.max()
+
+    if high - low < 40:
         return None
- 
-    # ج) الخطوط = البكسلات اللي أغمق من اللي حولها بشكل واضح
-    #    (هذا يتجاهل الخلفيات الغامقة الكبيرة مثل الخشب والظلال)
-    blur = max(2, max(gray.shape) // 15)
-    around = np.array(gray_img.filter(ImageFilter.GaussianBlur(blur)), dtype="float32")
-    strokes = gray < (around - STROKE_CONTRAST)
- 
-    # د1) ننظف: نشيل النقاط الصغيرة، ونشيل أي شي ملاصق لحافة الصورة
-    #     (يد، قلم، حافة طاولة...)
-    labels, count = ndimage.label(strokes, structure=np.ones((3, 3)))
-    sizes = ndimage.sum(strokes, labels, range(1, count + 1))
-    on_edge = np.unique(np.concatenate(
-        [labels[0, :], labels[-1, :], labels[:, 0], labels[:, -1]]))
-    keep = np.zeros(count + 1, dtype=bool)
-    for number in range(1, count + 1):
-        if sizes[number - 1] >= 10 and number not in on_edge:
-            keep[number] = True
-    cleaned = keep[labels]
-    if cleaned.sum() >= 20:          # إذا بقي شي نستخدمه، وإلا نرجع للأصلي
-        strokes = cleaned
- 
-    if strokes.sum() < 20:
+
+    # Detect dark drawing strokes
+    mask = gray < (low + high) / 2
+
+    strokes = Image.fromarray(
+        mask.astype("uint8") * 255
+    )
+
+    # Find drawing boundaries
+    bbox = strokes.getbbox()
+
+    if bbox is None:
         return None
- 
-    # د2) نقص حول الرسمة
-    ys, xs = np.where(strokes)
-    strokes = strokes[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
- 
-    # هـ) نخليها مربع مع هامش صغير
-    h, w = strokes.shape
-    side = max(h, w)
-    margin = max(2, int(side * 0.12))
-    square = np.zeros((side + 2 * margin, side + 2 * margin), dtype="uint8")
-    top = margin + (side - h) // 2
-    left = margin + (side - w) // 2
-    square[top:top + h, left:left + w] = strokes * 255   # خطوط بيضاء على أسود
- 
-    # و) نصغّر، نسمّك الخطوط شوي، ونصغّر لـ 28x28
-    img = Image.fromarray(square).resize((56, 56))
-    img = img.filter(ImageFilter.MaxFilter(3))     # تسميك
-    img = img.resize((28, 28))
- 
-    arr = np.array(img, dtype="float32")
-    arr = arr / arr.max() * 255                     # أقوى بكسل = 255
-    return arr.astype("uint8")
- 
- 
-# ------------------------------------------------------------
-# 5) البحث
-# ------------------------------------------------------------
+
+    # Crop the drawing
+    strokes = strokes.crop(bbox)
+
+    w, h = strokes.size
+
+    # Make the drawing square
+    side = max(w, h)
+
+    margin = int(side * 0.15) + 1
+
+    size = side + (2 * margin)
+
+    square = Image.new(
+        "L",
+        (size, size),
+        0
+    )
+
+    left = (size - w) // 2
+    top = (size - h) // 2
+
+    square.paste(
+        strokes,
+        (left, top)
+    )
+
+    # Resize to 28x28
+    small = square.resize(
+        (28, 28),
+        Image.Resampling.BOX
+    )
+
+    return np.asarray(
+        small,
+        dtype="uint8"
+    )
+
+
+# 5. Search for similar drawings
 def search(query_vector, embeddings, k=25):
-    scores = embeddings @ query_vector      # التشابه مع كل رسمة بالمكتبة
-    best = np.argsort(-scores)[:k]          # أرقام أعلى k
+
+    scores = embeddings @ query_vector
+
+    best = np.argsort(-scores)[:k]
+
     return best, scores[best]
- 
