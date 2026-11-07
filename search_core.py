@@ -6,6 +6,8 @@ from scipy import ndimage
 # في المهمة 4 جرّب الاثنين وشوف أيهم أفضل.
 INVERT = False
  
+STROKE_CONTRAST = 30
+ 
  
 # ------------------------------------------------------------
 # 1) تحميل الموديل
@@ -80,7 +82,7 @@ def preprocess_query(image):
     #    (هذا يتجاهل الخلفيات الغامقة الكبيرة مثل الخشب والظلال)
     blur = max(2, max(gray.shape) // 15)
     around = np.array(gray_img.filter(ImageFilter.GaussianBlur(blur)), dtype="float32")
-    strokes = gray < (around - 30)
+    strokes = gray < (around - STROKE_CONTRAST)
  
     # د1) ننظف: نشيل النقاط الصغيرة، ونشيل أي شي ملاصق لحافة الصورة
     #     (يد، قلم، حافة طاولة...)
