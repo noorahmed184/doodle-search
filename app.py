@@ -34,38 +34,61 @@ with tab2:
         image = Image.open(photo)
  
 
+
 if image is not None:
-    small = preprocess_query(image)                  
- 
+
+    small = preprocess_query(image)
+
     if small is None:
         st.info("No drawing found in the image")
+
     else:
         col1, col2 = st.columns(2)
+
         col1.image(image, caption="Your image", width=200)
-        col2.image(Image.fromarray(small).resize((200, 200), Image.NEAREST),
-                   caption="What the model sees")
- 
-        vector = embed(model, small[None])[0]       
-        best, scores = search(vector, embeddings, config["top_k"])
- 
+
+        col2.image(
+            Image.fromarray(small).resize(
+                (200, 200),
+                Image.Resampling.NEAREST
+            ),
+            caption="What the model sees"
+        )
+
+        # Convert drawing into a vector
+        vector = embed(model, small[None])[0]
+
+        # Search for similar drawings
+        best, scores = search(
+            vector,
+            embeddings,
+            config["top_k"]
+        )
+
         st.subheader("Top 25 similar doodles")
 
-if scores[0] < config["threshold"]:
-    st.info("Showing the closest matches, but similarity is low.")
+        if scores[0] < config["threshold"]:
+            st.info("Similarity is low. Showing the closest matches.")
 
-for row in range(5):
-    columns = st.columns(5)
+        for row in range(5):
 
-    for c in range(5):
-        n = row * 5 + c
+            columns = st.columns(5)
 
-        doodle = Image.fromarray(
-            gallery_images[best[n]]
-        ).resize((100, 100), Image.Resampling.NEAREST)
+            for c in range(5):
 
-        columns[c].image(
-            doodle,
-            caption=f"Similarity: {scores[n]:.2f}"
-        )
+                n = row * 5 + c
+
+                doodle = Image.fromarray(
+                    gallery_images[best[n]]
+                ).resize(
+                    (100, 100),
+                    Image.Resampling.NEAREST
+                )
+
+                columns[c].image(
+                    doodle,
+                    caption=f"Similarity: {scores[n]:.2f}"
+                )
+
  
 st.caption("Data: Quick, Draw! by Google, Inc., CC BY 4.0")
