@@ -33,6 +33,12 @@ def embed(model, images_28):
     vectors = np.vstack(all_vectors)
     lengths = np.linalg.norm(vectors, axis=1, keepdims=True)
     return vectors / lengths 
+
+def flatten_to_white(image):
+    image = image.convert("RGBA")
+    background = Image.new("RGBA", image.size, "white")
+    background.alpha_composite(image)
+    return background.convert("RGB")
  
 def preprocess_query(image):
     gray = np.array(flatten_to_white(image).convert("L"), dtype="float32")
