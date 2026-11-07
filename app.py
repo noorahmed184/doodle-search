@@ -48,15 +48,24 @@ if image is not None:
         vector = embed(model, small[None])[0]       
         best, scores = search(vector, embeddings, config["top_k"])
  
-        if scores[0] < config["threshold"]:
-            st.warning("Nothing similar found")
-        else:
-            st.subheader("Top 25 similar doodles")
-            for row in range(5):
-                columns = st.columns(5)
-                for c in range(5):
-                    n = row * 5 + c
-                    doodle = Image.fromarray(gallery_images[best[n]]).resize((100, 100), Image.NEAREST)
-                    columns[c].image(doodle, caption=f"{scores[n]:.2f}")
+        st.subheader("Top 25 similar doodles")
+
+if scores[0] < config["threshold"]:
+    st.info("Showing the closest matches, but similarity is low.")
+
+for row in range(5):
+    columns = st.columns(5)
+
+    for c in range(5):
+        n = row * 5 + c
+
+        doodle = Image.fromarray(
+            gallery_images[best[n]]
+        ).resize((100, 100), Image.Resampling.NEAREST)
+
+        columns[c].image(
+            doodle,
+            caption=f"Similarity: {scores[n]:.2f}"
+        )
  
 st.caption("Data: Quick, Draw! by Google, Inc., CC BY 4.0")
